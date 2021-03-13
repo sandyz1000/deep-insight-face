@@ -1,7 +1,6 @@
 import os
 import cv2
 import numpy as np
-from typing import Union
 import matplotlib.pyplot as plt
 from PIL import Image
 from . import LOG_DIR, encoding_base
@@ -10,7 +9,7 @@ from ..networks.siamese import buildin_models
 from collections import namedtuple
 from keras.applications.vgg16 import preprocess_input
 from keras.preprocessing.image import img_to_array
-from ..datapipeline.generator import SiameseDataGenerator
+from ..datagen.generator import SiameseDataGenerator
 
 ImageDataPath = namedtuple("ImageDataPath", ("img_path", "pairs"))
 
@@ -52,8 +51,6 @@ class Train:
             ModelCheckpoint(self.model_path), 
             TensorBoard(log_dir=self.logs_dir),
             EarlyStopping(monitor='loss', patience=5),
-            # eval_callback(self.model, val_binfile, image_path=val_image_path,
-            #               pairs_txt=val_pairs_txt, batch_size=batch_size)
         ]
 
         x_train = SiameseDataGenerator(
@@ -128,9 +125,8 @@ class img_to_encoding(encoding_base):
         assert len(img_size) == 2, "Invalid Image size format"
         super(img_to_encoding, self).__init__(emd_model, img_size)
 
-    def _embedding(self, image: Union[str, np.ndarray]) -> np.ndarray:
-        if isinstance(image, str) and os.path.exists(image):
-            image = cv2.imread(image, cv2.IMREAD_COLOR)[..., ::-1]  # Use RGB Format
+    def _embedding(self, image: np.ndarray) -> np.ndarray:
+        assert isinstance(image, np.ndarray), "Invalid image format, should be of type numpy array"
         img = cv2.resize(image, tuple(self.img_size), interpolation=Image.BICUBIC) / 255.
         inp = np.expand_dims(img, axis=0)
         inp = preprocess_input(inp)

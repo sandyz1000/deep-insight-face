@@ -2,7 +2,7 @@ import numpy as np
 from typing import Any
 import time
 import matplotlib.pyplot as plt
-from ..visualizations import plot
+from .visualizations import plot
 
 
 # TODO: FIX THIS MODULE

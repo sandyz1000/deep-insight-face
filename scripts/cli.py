@@ -3,6 +3,7 @@ import logging
 import os
 import click
 from time import time
+import sys
 from functools import wraps
 
 
@@ -54,8 +55,8 @@ def print_training_info(**kwargs):
               help="Define Loss function for backend CHOICES is 'simple_triplet_nw', 'semihard_triplet_nw' ")
 def train_triplets(model_path, input_shape, data_path, eval_paths, batch_size=64,
                    emd_size=128, epochs=20, mode=1, threshold=0.5):
-    from .networks.triplet import model_choice
-    from .training.triplet import Train
+    from deep_insight_face.networks.triplet import model_choice
+    from deep_insight_face.training.triplet import Train
 
     model_path = MODEL_DIR + os.sep + f"triplet/tripletface_epochs-{epochs}_mode-{mode}.h5"
     print_training_info(model_path=model_path, epochs=epochs, data_path=data_path, eval_path=eval_paths)
@@ -71,23 +72,6 @@ def train_triplets(model_path, input_shape, data_path, eval_paths, batch_size=64
     init_training._fit(train_data_path, val_data, epochs=epochs, batch_size=batch_size, threshold=threshold)
 
 
-@click.command()
-@click.option("--backbone", type=str, default='mobinet', help="Model backbone")
-@click.option("--model_path", type=str, default=None, help="Model checkpoint fullpath")
-@click.option("--data_path", required=True, type=str, help="Face-KYC aligned dataset path")
-@click.option("--eval_paths", nargs='+', default=[], type=str, help="Evaluation dataset path")
-@click.option("--batch_size", type=int, default=32, help="Batch size of the training dataset default size is 32")
-@click.option("--emd_size", type=int, default=256, help="Embedding size of the bottleneck layer")
-@click.option("--epochs", default=20, type=int, help="EPOCHS size, default to 20")
-def train_multiface(backbone, model_path, data_path, eval_paths, batch_size=128, emd_size=256, epochs=20):
-    from .training.multiface import multiface_train, deepinsight_train, deepinsight_train2
-
-    assert all([os.path.splitext(e)[1] == 'bin' for e in eval_paths]), "Invalid model extenstion, prepare in bin format"
-
-    multiface_train(data_path, model_path, eval_paths, log_dir=os.path.join(LOG_DIR, "insightface"))
-    deepinsight_train(backbone, data_path, model_path, eval_paths, log_dir=os.path.join(LOG_DIR, "insightface"))
-    # deepinsight_train2(backbone, data_path, model_path, eval_paths, log_dir=os.path.join(LOG_DIR, "insightface"))
-
 
 @click.command()
 @click.option("--model_path", type=str, default=None, help="Siamese model path")
@@ -98,7 +82,7 @@ def train_multiface(backbone, model_path, data_path, eval_paths, batch_size=128,
 @click.option("--emd_size", type=int, default=128, help="Embedding size of the bottleneck layer")
 @click.option("--epochs", default=20, type=int, help="EPOCHS size, default to 20")
 def train_siamese(model_path, input_shape, data_path, eval_paths, batch_size=32, emd_size=128, epochs=20):
-    from .training.siamese import Train
+    from deep_insight_face.training.siamese import Train
     model_path = model_path + os.path.sep + f"siameseface_epochs-{epochs}_mode-default.h5"
     print_training_info(model_path=model_path, epochs=epochs, data_path=data_path, eval_path=eval_paths)
     train_data = ImageDataPath(data_path, data_path + os.path.sep + "pairs.txt")
@@ -132,7 +116,7 @@ def evaluate(
         images_path, model_path, model_name, batch_size=12, image_size=160, pairs='pairs.txt',
         nrof_folds=10, distance_metric=10, use_flipped_images=True, subtract_mean=True,
         use_fixed_image_standardization=True, save_output_detail=True, result_csv_name="result.csv"):
-    from .evaluation.evals import evaluate as api_evaluate
+    from deep_insight_face.evaluation.evals import evaluate as api_evaluate
     
     # TODO: Fix this method
     model = None
@@ -140,16 +124,6 @@ def evaluate(
                  nrof_folds, distance_metric, subtract_mean,
                  use_flipped_images, use_fixed_image_standardization)
 
-
-@click.command()
-@click.option("--test_bin_file", default=None, type=str, help="Test bin file if available")
-@click.option("--image_path", default=None, type=str, help="Image path to eval")
-@click.option("--pairs_txt", default=None, type=str, help="Pairs file")
-@timing
-def img_tf_bin(test_bin_file, image_path, pairs_txt):
-    from .raw_img_tf import raw_image_to_tf
-    raw_image_to_tf(image_path, pairs_txt, test_bin_file)()
-    logger.info(">>> Completed Conversion IMG_TF_BIN ....")
 
 
 @click.command()
@@ -171,8 +145,10 @@ def main():
 
 
 main.add_command(train_siamese, "train_siamese")
-main.add_command(train_multiface, "train_deepinsight")
 main.add_command(train_triplets, "train_triplet")
 main.add_command(evaluate, "evaluate")
-main.add_command(img_tf_bin, 'img_tf_bin')
 main.add_command(generate_pairs, 'generate_pairs')
+
+
+if __name__ == "__main__":
+    sys.exit(cli.main())

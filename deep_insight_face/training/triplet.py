@@ -4,11 +4,11 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 from keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping
-from ..handlers.evals import eval_callback
+# from ..handlers.evals import eval_callback
 from ..networks.triplet import buildin_models, model_choice
 from . import LOG_DIR, encoding_base
 from collections import namedtuple
-from ..datapipeline.generator import TripletGenerator
+from ..datagen.generator import TripletGenerator
 
 ImageDataPath = namedtuple("ImageDataPath", ("img_path", "pairs"))
 
@@ -174,8 +174,8 @@ class img_to_encoding(encoding_base):
         super(img_to_encoding, self).__init__(emd_model, img_size)
 
     def _embedding(self, image: np.ndarray) -> np.ndarray:
+        assert isinstance(image, np.ndarray), "Invalid image format, should be of type numpy array"
         img = cv2.resize(image, tuple(self.img_size), interpolation=Image.BICUBIC) / 255.
         inp = np.expand_dims(img, axis=0)
-        embedding = self.emd_model.predict_on_batch(inp)
-        return embedding
+        return self.emd_model.predict_on_batch(inp)
 

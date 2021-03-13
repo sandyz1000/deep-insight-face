@@ -1,15 +1,27 @@
-import os
-import uuid
+import typing
+import tensorflow as tf
+from keras import backend as K
 import cv2
 import numpy as np
 import colorsys
-from .utility import (preprocess_input, decode_netout, draw_boxes,
-                      correct_yolo_boxes, do_nms, thread_safe_singleton)
-from tensorflow.python import keras
+# from .utility import (preprocess_input, decode_netout, draw_boxes,
+#                       correct_yolo_boxes, do_nms, thread_safe_singleton)
+from threading import Lock
 from PIL import Image
 import warnings
-from tempfile import NamedTemporaryFile
 warnings.simplefilter('ignore')
+
+
+def thread_safe_singleton(cls):
+    instances = {}
+    session_lock = Lock()
+
+    def wrapper(*args, **kwargs):
+        with session_lock:
+            if cls not in instances:
+                instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+    return wrapper
 
 
 class YoloArgs(object):
@@ -24,105 +36,181 @@ class YoloArgs(object):
         self.img_size = img_size
 
 
-@thread_safe_singleton
-class YOLO(object):
-    def __init__(self, args: YoloArgs) -> None:
-        self.model_path = args.model
-        self.class_names = args.classes
-        self.anchors = args.anchors
-        self.net_h, self.net_w = args.img_size[0], args.img_size[1]
-        self.obj_thresh = args.obj_thresh
-        self.nms_thresh = args.nms_thresh
-        self.__load_model__()
-        print("======= YoLov3 weight load complete ======= ")
+def yolo_head(feats, anchors, num_classes, input_shape, calc_loss=False):
+    '''Convert final layer features to bounding box parameters'''
 
-    def __load_model__(self):
-        self.model = keras.models.load_model(self.model_path)
+    num_anchors = len(anchors)
 
-    def letterbox_image(self, image, size):
-        """Resize image with unchanged aspect ratio using padding
-        """
-        img_width, img_height = image.size
-        w, h = size
-        scale = min(w / img_width, h / img_height)
-        nw = int(img_width * scale)
-        nh = int(img_height * scale)
+    # Reshape to batch, height, width, num_anchors, box_params.
+    anchors_tensor = K.reshape(K.constant(anchors), [1, 1, 1, num_anchors, 2])
 
-        image = image.resize((nw, nh), Image.BICUBIC)
-        new_image = Image.new('RGB', size, (128, 128, 128))
-        new_image.paste(image, ((w - nw) // 2, (h - nh) // 2))
-        return new_image
+    # height, width
+    grid_shape = K.shape(feats)[1:3]
+    grid_y = K.tile(K.reshape(K.arange(0, stop=grid_shape[0]), [-1, 1, 1, 1]),
+                    [1, grid_shape[1], 1, 1])
+    grid_x = K.tile(K.reshape(K.arange(0, stop=grid_shape[1]), [1, -1, 1, 1]),
+                    [grid_shape[0], 1, 1, 1])
+    grid = K.concatenate([grid_x, grid_y])
+    grid = K.cast(grid, K.dtype(feats))
 
-    def detect_boxes(self, image, draw=True):
-        """ Predict and get bounding box using YOLOv3 model
-        """
-        # new_image_size = (image.width - (image.width % 32),
-        #                   image.height - (image.height % 32))
-        # boxed_image = self.letterbox_image(image, new_image_size)
-        img_size = (image.width, image.height)
-        image = np.array(image, dtype='float32')
-        image_h, image_w, _ = image.shape
-        nb_images = 1
-        batch_input = np.zeros((nb_images, self.net_h, self.net_w, 3))
-        # preprocess the input
-        for i in range(nb_images):
-            batch_input[i] = preprocess_input(image, self.net_h, self.net_w)
+    feats = K.reshape(
+        feats, [-1, grid_shape[0], grid_shape[1], num_anchors, num_classes + 5])
 
-        # run the prediction
-        batch_output = self.model.predict_on_batch(batch_input)
-        batch_boxes = [None] * nb_images
+    # Adjust preditions to each spatial grid point and anchor size.
+    box_xy = (K.sigmoid(feats[..., :2]) + grid) / K.cast(grid_shape[::-1],
+                                                         K.dtype(feats))
+    box_wh = K.exp(feats[..., 2:4]) * anchors_tensor / K.cast(input_shape[::-1],
+                                                              K.dtype(feats))
+    box_confidence = K.sigmoid(feats[..., 4:5])
+    box_class_probs = K.sigmoid(feats[..., 5:])
 
-        for i in range(nb_images):
-            yolos = [batch_output[0][i], batch_output[1][i], batch_output[2][i]]
-            boxes = []
-            # decode the output of the network
-            for j in range(len(yolos)):
-                yolo_anchors = self.anchors[(2 - j) * 6:(3 - j) * 6]
-                boxes += decode_netout(yolos[j], yolo_anchors, self.obj_thresh, self.net_h, self.net_w)
+    if calc_loss:
+        return grid, feats, box_xy, box_wh
+    return box_xy, box_wh, box_confidence, box_class_probs
 
-            # correct the sizes of the bounding boxes
-            correct_yolo_boxes(boxes, image_h, image_w, self.net_h, self.net_w)
-            # suppress non-maximal boxes
-            do_nms(boxes, self.nms_thresh)
-            batch_boxes[i] = boxes
 
-        out = []
-        for box in batch_boxes:
-            if draw:
-                with NamedTemporaryFile(delete=False, prefix="facematch_detect") as f:
-                    f.name += ".png"
-                    dimg = draw_boxes(image, box, self.class_names, self.obj_thresh)
-                    gray = cv2.cvtColor(dimg, cv2.COLOR_BGR2GRAY)
-                    cv2.imwrite(f.name, gray)
-            out.append(self.transform_format(box, img_size))
+def correct_boxes(box_xy, box_wh, input_shape, image_shape):
+    '''Get corrected boxes'''
 
-        return image, out[0]
+    box_yx = box_xy[..., ::-1]
+    box_hw = box_wh[..., ::-1]
+    input_shape = K.cast(input_shape, K.dtype(box_yx))
+    image_shape = K.cast(image_shape, K.dtype(box_yx))
+    new_shape = K.round(image_shape * K.min(input_shape / image_shape))
+    offset = (input_shape - new_shape) / 2. / input_shape
+    scale = input_shape / new_shape
+    box_yx = (box_yx - offset) * scale
+    box_hw *= scale
 
-    def transform_format(self, boxes, img_size):
-        final_boxes = []
-        for _, box in enumerate(boxes):
-            label = -1
-            for i in range(len(self.class_names)):
-                if box.classes[i] > self.obj_thresh:
-                    label = i
-            if label >= 0:
-                left, top, right, bottom = box.xmin, box.ymin, box.xmax, box.ymax
-                top = max(0, np.floor(top - 0.5).astype('int32'))
-                left = max(0, np.floor(left - 0.5).astype('int32'))
-                bottom = min(img_size[1], np.floor(bottom + 0.5).astype('int32'))
-                right = min(img_size[0], np.floor(right + 0.5).astype('int32'))
-                final_boxes.append([left, top, right, bottom])
+    box_mins = box_yx - (box_hw / 2.)
+    box_maxes = box_yx + (box_hw / 2.)
+    boxes = K.concatenate([
+        box_mins[..., 0:1],  # y_min
+        box_mins[..., 1:2],  # x_min
+        box_maxes[..., 0:1],  # y_max
+        box_maxes[..., 1:2]  # x_max
+    ])
 
-                predicted_class = box.get_label()
-                score = box.get_score()
-                _ = '{} {:.2f}'.format(predicted_class, score)
-                # draw = ImageDraw.Draw(image)
-                # print(text, (left, top), (right, bottom))
-        return final_boxes
+    # Scale boxes back to original image shape.
+    boxes *= K.concatenate([image_shape, image_shape])
+    return boxes
 
-    def generate_colormap(self):
-        hsv_tuples = [(x / len(self.class_names), 1., 1.)
-                      for x in range(len(self.class_names))]
-        self.colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
-        self.colors = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), self.colors))
-        np.random.shuffle(self.colors)
+
+def boxes_and_scores(feats, anchors, num_classes, input_shape,
+                     image_shape):
+    '''Process Convolutional layer output'''
+
+    box_xy, box_wh, box_confidence, box_class_probs = yolo_head(feats, anchors, num_classes, input_shape)
+    boxes = correct_boxes(box_xy, box_wh, input_shape, image_shape)
+    boxes = K.reshape(boxes, [-1, 4])
+    box_scores = box_confidence * box_class_probs
+    box_scores = K.reshape(box_scores, [-1, num_classes])
+    return boxes, box_scores
+
+
+def letterbox_image(image: np.ndarray, size: typing.Tuple[int]):
+    '''Resize image with unchanged aspect ratio using padding'''
+    img_width, img_height = image.size
+    w, h = size
+    scale = min(w / img_width, h / img_height)
+    nw = int(img_width * scale)
+    nh = int(img_height * scale)
+
+    image = image.resize((nw, nh), Image.BICUBIC)
+    new_image = Image.new('RGB', size, (128, 128, 128))
+    new_image.paste(image, ((w - nw) // 2, (h - nh) // 2))
+    return new_image
+
+
+def evaluate(outputs: typing.List[tf.Tensor], anchors: np.ndarray, num_classes: int,
+             image_shape: typing.Tuple, max_boxes: int = 20, score_threshold: float = .6,
+             iou_threshold: float = .5):
+    '''Evaluate the YOLO model on given input and return filtered boxes'''
+
+    num_layers = len(outputs)
+    anchor_mask = [[6, 7, 8], [3, 4, 5], [0, 1, 2]] if num_layers == 3 else [
+        [3, 4, 5], [1, 2, 3]]
+    input_shape = K.shape(outputs[0])[1:3] * 32
+    boxes = []
+    box_scores = []
+
+    for l in range(num_layers):
+        _boxes, _box_scores = boxes_and_scores(outputs[l],
+                                               anchors[anchor_mask[l]],
+                                               num_classes, input_shape,
+                                               image_shape)
+        boxes.append(_boxes)
+        box_scores.append(_box_scores)
+
+    boxes = K.concatenate(boxes, axis=0)
+    box_scores = K.concatenate(box_scores, axis=0)
+
+    mask = box_scores >= score_threshold
+    max_boxes_tensor = K.constant(max_boxes, dtype='int32')
+    boxes_ = []
+    scores_ = []
+    classes_ = []
+
+    for c in range(num_classes):
+        class_boxes = tf.boolean_mask(boxes, mask[:, c])
+        class_box_scores = tf.boolean_mask(box_scores[:, c], mask[:, c])
+        nms_index = tf.image.non_max_suppression(
+            class_boxes, class_box_scores, max_boxes_tensor,
+            iou_threshold=iou_threshold)
+        class_boxes = K.gather(class_boxes, nms_index)
+        class_box_scores = K.gather(class_box_scores, nms_index)
+        classes = K.ones_like(class_box_scores, 'int32') * c
+        boxes_.append(class_boxes)
+        scores_.append(class_box_scores)
+        classes_.append(classes)
+
+    boxes_ = K.concatenate(boxes_, axis=0)
+    scores_ = K.concatenate(scores_, axis=0)
+    classes_ = K.concatenate(classes_, axis=0)
+
+    return boxes_, scores_, classes_
+
+
+def draw(frame, left, top, right, bottom):
+    cv2.rectangle(frame, (int(left), int(top)), (int(right), int(bottom)), (255, 0, 0), 1)
+
+
+def get_masked_image(frame, classwise_tuples):
+    frame = np.asarray(frame)
+    keys = classwise_tuples.keys()
+    for key in keys:
+        draw(frame, key[0], key[1], key[0] + key[2], key[1] + key[3])
+    return frame
+
+
+def preprocess_input(image: np.ndarray, net_h: int, net_w: int):
+    new_h, new_w, _ = image.shape
+
+    # determine the new size of the image
+    if (float(net_w) / new_w) < (float(net_h) / new_h):
+        new_h = (new_h * net_w) // new_w
+        new_w = net_w
+    else:
+        new_w = (new_w * net_h) // new_h
+        new_h = net_h
+
+    # resize the image to the new size
+    # resized = cv2.resize(image[:, :, ::-1] / 255., (new_w, new_h))
+    resized = cv2.resize(image / 255., (new_w, new_h))
+
+    # embed the image into the standard letter box
+    new_image = np.ones((net_h, net_w, 3)) * 0.5
+    new_image[(net_h - new_h) // 2:(net_h + new_h) // 2, (net_w - new_w) // 2:(net_w + new_w) // 2, :] = resized
+    new_image = np.expand_dims(new_image, 0)
+
+    return new_image
+
+
+# def detect_boxes(boxes: typing.List[int], scores: typing.List[int],
+#                  classes: typing.List[int], shape: typing.Tuple[int]):
+#     final_boxes = []
+#     for i, c in reversed(list(enumerate(classes))):
+#         box = boxes[i]
+#         top, left, bottom, right = box
+#         final_boxes.append([left, top, right, bottom])
+#     return final_boxes

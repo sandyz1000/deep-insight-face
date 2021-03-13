@@ -19,7 +19,7 @@ def evaluate(emd_model, image_paths, pairs,
              batch_size, nrof_folds, distance_metric,
              subtract_mean=False, use_flipped_images=False,
              use_fixed_image_standardization=False,
-             use_image_aug_random=False):
+             use_image_aug_random=False, save_output_detail=False):
     # Run forward pass to calculate embeddings
 
     def preprocess_func(img):
@@ -64,7 +64,7 @@ def evaluate(emd_model, image_paths, pairs,
     print('Equal Error Rate (EER): %1.3f' % eer)
 
     print('>>>> ============== >>>>')
-    if FLAGS.save_output_detail:
+    if save_output_detail:
         csv_out = result_to_csv(emb_arr, lab_arr, paths_arr, tpr, fpr,
                                 accuracy, f1scores, val, val_std, far)
         csv_out(0.3)
