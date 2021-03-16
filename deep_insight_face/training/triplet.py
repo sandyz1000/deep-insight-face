@@ -8,7 +8,7 @@ from keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping
 from ..networks.triplet import buildin_models, model_choice
 from . import LOG_DIR, encoding_base
 from collections import namedtuple
-from ..datagen.generator import TripletGenerator
+from ..datagen.generator import triplet_datagenerator
 
 ImageDataPath = namedtuple("ImageDataPath", ("img_path", "pairs"))
 
@@ -41,17 +41,15 @@ class Train:
 
     def __train_simpletriplet(self, train_data, batch_size, epochs, callbacks):
 
-        x_train = TripletGenerator(
+        x_train = triplet_datagenerator(
             train_data.img_path,
             train_data.pairs,
-            horizontal_flip=True,
-            shuffle=True,
             batch_size=batch_size,
-            # use_multiprocessing=True,
             target_size=self.input_shape[:-1])
 
         history = self.model.fit(
             x_train,
+            steps_per_epoch=100,
             epochs=epochs,
             verbose=1,
             callbacks=callbacks
@@ -118,64 +116,3 @@ class Train:
         plt.legend()
         plt.title('Train/validation loss')
         plt.savefig("triplet_loss.png")
-
-    def verify(self, image_path, identity, database, threshold=0.7):
-        """
-        Function that verifies if the person on the "image_path" image is "identity".=
-
-        Arguments:
-        ----------
-        image_path -- path to an image
-        identity -- string, name of the person you'd like to verify the identity. Has to be a resident of the Happy house.
-        database -- python dictionary mapping names of allowed people's names (strings) to their encodings (vectors).
-        model -- your Inception model instance in Keras
-
-        Returns:
-        --------
-        dist -- distance between the image_path and the image of "identity" in the database.
-        door_open -- True, if the door should open. False otherwise.
-        """
-        # TODO: Fix this method
-
-        # Step 1: Compute the encoding for the image. Use img_to_encoding() see example above. (≈ 1 line)
-        encoding = img_to_encoding(self.model)(image_path)
-
-        # Step 2: Compute distance with identity's image (≈ 1 line)
-        dist = float(np.linalg.norm(encoding - database[identity]))
-
-        # Step 3: Open the door if dist < threshold, else don't open (≈ 3 lines)
-        if dist < threshold:
-            print("It's " + str(identity))
-            is_valid = True
-        else:
-            print("It's not " + str(identity))
-            is_valid = False
-
-        # model_dir_path = './demo/models'
-        # image_dir_path = "./demo/data/test-images"
-
-        # fnet.load_model(model_dir_path)
-
-        # enc1 = fnet.img_to_encoding(os.path.join(
-        #     image_dir_path, "3000CD0118870/4016_3000CD0118870_CANCELLED_CNCLD_APPLICANT-PHOTO.jpg"))
-
-        # enc2 = fnet.img_to_encoding(os.path.join(
-        #     image_dir_path, "3000CD0118870/4016_3000CD0118870_CANCELLED_CNCLD_VOTER.jpg"))
-
-        # distance = np.linalg.norm(enc1 - enc2)
-        # print(distance)
-
-        return dist, is_valid
-
-
-class img_to_encoding(encoding_base):
-    def __init__(self, emd_model, img_size=(96, 96)) -> None:
-        assert len(img_size) == 2, "Invalid Image size format"
-        super(img_to_encoding, self).__init__(emd_model, img_size)
-
-    def _embedding(self, image: np.ndarray) -> np.ndarray:
-        assert isinstance(image, np.ndarray), "Invalid image format, should be of type numpy array"
-        img = cv2.resize(image, tuple(self.img_size), interpolation=Image.BICUBIC) / 255.
-        inp = np.expand_dims(img, axis=0)
-        return self.emd_model.predict_on_batch(inp)
-

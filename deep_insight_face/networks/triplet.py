@@ -4,7 +4,7 @@ import numpy as np
 import typing
 from numpy import genfromtxt
 import tensorflow as tf
-from keras.applications import MobileNetV2, ResNet50V2
+from keras.applications import MobileNetV2, ResNet50V2, VGG16
 from keras import optimizers as KO
 from keras.layers import Conv2D, ZeroPadding2D, Activation, Input, \
     concatenate, DepthwiseConv2D, Dropout, PReLU
@@ -16,7 +16,7 @@ from keras.layers.core import Lambda, Flatten, Dense
 from keras import backend as K
 
 
-class faceRecogModel:
+class InceptionNetwork:
     def __init__(self, input_shape=(96, 96, 3), emd_size=128, weights=None) -> None:
         self.input_shape = tuple(input_shape)
         assert self.input_shape == (96, 96, 3), "Invalid Input shape, Shape should be of dimension (96, 96, 3)"
@@ -30,8 +30,7 @@ class faceRecogModel:
         return self.model(*args, **kwargs)
 
     def __getattr__(self, item):
-        return (getattr(self.model, item) if hasattr(self.model, item)
-                else getattr(self, item, None))
+        return getattr(self.model, item) if hasattr(self.model, item) else getattr(self, item, None)
 
     def _load_weights(self, model_dir_path):
         """ Load Model weight from csv
@@ -465,54 +464,47 @@ class bottleneck_network:
         input_shape {[type]} -- [description] (default: {(96, 96, 3)})
     """
 
-    def __init__(self, net="resnet",
-                 emd_size=128,
-                 input_shape=(96, 96, 3), use_keras_bn=False, **kwargs):
-        assert net in ('mobilenet', 'resnet', 'facereco'), "Invalid bottleneck network"
+    def __init__(self,
+                 net="resnet",
+                 emd_size=128, input_shape=(96, 96, 3), **kwargs):
+        assert net in ('mobilenet', 'resnet', 'vgg16'), "Invalid bottleneck network"
         self.net = net
         self.emd_size = emd_size
         self.input_shape = input_shape
-        self.use_keras_bn = use_keras_bn
         self.kwargs = kwargs
 
-    def __call__(self, dropout=1) -> typing.Any:
-        if self.net == 'facereco':
-            return self._face_reco_model()
-        elif self.use_keras_bn or self.net in ('mobilenet', 'resnet'):
-            return self._kbottleneck_v1(dropout=dropout)
-        else:
-            raise ValueError("Unable to invoke set use_keras_bn=True during initilization.")
+    def __call__(self, default_model_ver='v1', dropout=.2) -> typing.Any:
+        base_model = getattr(self, 'build_models_' + default_model_ver)(dropout=dropout)
+        return base_model
 
-    def _kbottleneck_v1(self, dropout=0.3):
-        _layers = []
+    def __get_bottleneck(self, ):
         if self.net == "mobilenet":
-            _layers.append(MobileNetV2(input_shape=self.input_shape, include_top=False, weights='imagenet'))
+            bottleneck = MobileNetV2(input_shape=self.input_shape, include_top=False, weights='imagenet')
         elif self.net == "resnet":
-            _layers.append(ResNet50V2(input_shape=self.input_shape, include_top=False, weights='imagenet'))
-        else:
-            raise AttributeError("Invalid bottleneck network: ", self.net)
+            bottleneck = ResNet50V2(input_shape=self.input_shape, include_top=False, weights='imagenet')
+        elif self.net == "vgg16":
+            bottleneck = VGG16(include_top=False, weights='imagenet', input_shape=self.input_shape)
+        return bottleneck
 
-        _layers += [
+    def build_models_v1(self, dropout=0.3):
+        seq_layers = [self.__get_bottleneck()]
+        seq_layers += [
             KL.Conv2D(filters=64, kernel_size=2, padding='same', activation='relu'),
             KL.MaxPooling2D(pool_size=2),
             KL.Dropout(0.3),
             KL.Conv2D(filters=32, kernel_size=2, padding='same', activation='relu'),
             KL.MaxPooling2D(pool_size=2),
-            KL.Dropout(0.3),
+            KL.Dropout(dropout),
             KL.Flatten(name='flatten'),
             KL.Dense(self.emd_size, activation=None, name="embeddings"),  # No activation on final dense layer
             # KL.Lambda(lambda x: tf.math.l2_normalize(x, axis=1))  # L2 normalize embeddings
         ]
-        base_model = Sequential(_layers)
+        base_model = Sequential(seq_layers)
         # base_model.layers[0].trainable = False
         return base_model
 
-    def _kbottleneck(self, dropout=1):
-        if self.net == 'mobilenet':
-            xx = MobileNetV2(input_shape=self.input_shape, include_top=False, weights='imagenet')
-
-        elif self.net == 'resnet':
-            xx = ResNet50V2(input_shape=self.input_shape, include_top=False, weights="imagenet")
+    def build_models_v2(self, dropout=0.3):
+        xx = self.__get_bottleneck()
 
         nw_input = xx.inputs[0]
         nw_output = xx.outputs[0]
@@ -535,11 +527,12 @@ class bottleneck_network:
         basic_model = Model(nw_input, norm_emb, name=xx.name)
         return basic_model
 
-    def _face_reco_model(self):
-        inception_model = faceRecogModel(input_shape=self.input_shape, emd_size=self.emd_size,
-                                         weights=self.kwargs.get('weights', None))
-        print("Total Params:", inception_model.count_params())
-        return inception_model
+
+def face_reco_model(emd_size=128, input_shape=(96, 96, 3), **kwargs):
+    inception_model = InceptionNetwork(input_shape=input_shape, emd_size=emd_size,
+                                       weights=kwargs.get('weights', None))
+    print("Total Params:", inception_model.count_params())
+    return inception_model
 
 
 class model_choice(enum.Enum):
@@ -547,10 +540,14 @@ class model_choice(enum.Enum):
     choice_2 = "semihard_triplet_nw"
 
 
-def simple_triplet_nw(input_shape=(96, 96, 3), emd_size=128, summary=True, **kwargs):
+def simple_triplet_nw(input_shape=(96, 96, 3), emd_size=128, use_inception=False, **kwargs):
     assert len(input_shape) == 3, "Invalid input shape"
-    # network definition
-    base_model = bottleneck_network(input_shape=input_shape, emd_size=emd_size, **kwargs)()
+    if use_inception:
+        base_model = InceptionNetwork(input_shape=input_shape, emd_size=emd_size,
+                                      weights=kwargs.get('weights', None))
+    else:
+        base_model = bottleneck_network(input_shape=input_shape, emd_size=emd_size, **kwargs)(
+            default_model_ver='v1')
     anchor_input = KL.Input(input_shape, name='anchor_input')
     positive_input = KL.Input(input_shape, name='positive_input')
     negative_input = KL.Input(input_shape, name='negative_input')
@@ -565,16 +562,19 @@ def simple_triplet_nw(input_shape=(96, 96, 3), emd_size=128, summary=True, **kwa
     merged_vector = KL.concatenate([encoded_anchor, encoded_positive, encoded_negative], axis=-1, name='merged_layer')
     model = Model(inputs=[anchor_input, positive_input, negative_input], outputs=merged_vector)
     model.compile(loss=triplet_loss, optimizer=adam_optim)
-
-    print(model.summary() if summary else ">>>>> SIMPLE_TRIPLET_NW Model sucessfully loaded >>>>> ")
     return model, base_model
 
 
-def semihard_triplet_nw(input_shape=(96, 96, 3), emd_size=128, summary=True, **kwargs):
+def semihard_triplet_nw(input_shape=(96, 96, 3), emd_size=128, use_inception=False, **kwargs):
     import tensorflow_addons as tfa
-    # from ..handlers.losses import triplet_loss_adapted_from_tf
+    # from ..common.losses import triplet_loss_adapted_from_tf
     assert len(input_shape) == 3, "Invalid input shape"
-    base_model = bottleneck_network(input_shape=input_shape, emd_size=emd_size, **kwargs)()
+    if use_inception:
+        base_model = InceptionNetwork(input_shape=input_shape, emd_size=emd_size,
+                                      weights=kwargs.get('weights', None))
+    else:
+        base_model = bottleneck_network(input_shape=input_shape, emd_size=emd_size, **kwargs)(
+            default_model_ver='v1')
     input_images = Input(shape=input_shape)  # input layer for images
     embeddings = base_model([input_images])
 
@@ -582,8 +582,6 @@ def semihard_triplet_nw(input_shape=(96, 96, 3), emd_size=128, summary=True, **k
     facemodel = Model(inputs=input_images, outputs=embeddings)
     facemodel.compile(optimizer=tf.keras.optimizers.Adam(0.001), loss=tfa.losses.TripletSemiHardLoss())
     # facemodel.compile(optimizer=tf.keras.optimizers.Adam(0.001), loss=triplet_loss_adapted_from_tf)
-
-    print(facemodel.summary() if summary else ">>>>> SEMIHARD_TRIPLET_NW Model sucessfully loaded >>>>> ")
     return facemodel, base_model
 
 

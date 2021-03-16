@@ -24,16 +24,13 @@ def thread_safe_singleton(cls):
     return wrapper
 
 
-class YoloArgs(object):
-    def __init__(self,
-                 yolo_model, anchors, classes,
-                 obj_thresh=0.3, nms_thresh=0.45, img_size=(416, 416)):
-        self.model = yolo_model
-        self.anchors = anchors
-        self.classes = classes
-        self.obj_thresh = obj_thresh
-        self.nms_thresh = nms_thresh
-        self.img_size = img_size
+class YoloArgs(typing.NamedTuple):
+    model: typing.Any
+    anchors: np.ndarray
+    classes: int
+    obj_thresh: float = 0.3
+    nms_thresh: float = 0.45
+    img_size: typing.Tuple = (416, 416)
 
 
 def yolo_head(feats, anchors, num_classes, input_shape, calc_loss=False):
@@ -122,9 +119,13 @@ def letterbox_image(image: np.ndarray, size: typing.Tuple[int]):
     return new_image
 
 
-def evaluate(outputs: typing.List[tf.Tensor], anchors: np.ndarray, num_classes: int,
-             image_shape: typing.Tuple, max_boxes: int = 20, score_threshold: float = .6,
-             iou_threshold: float = .5):
+def get_yolo_output(outputs: typing.List[tf.Tensor],
+                    anchors: np.ndarray,
+                    num_classes: int,
+                    image_shape: typing.Tuple,
+                    max_boxes: int = 20,
+                    score_threshold: float = .6,
+                    iou_threshold: float = .5):
     '''Evaluate the YOLO model on given input and return filtered boxes'''
 
     num_layers = len(outputs)
@@ -204,13 +205,3 @@ def preprocess_input(image: np.ndarray, net_h: int, net_w: int):
     new_image = np.expand_dims(new_image, 0)
 
     return new_image
-
-
-# def detect_boxes(boxes: typing.List[int], scores: typing.List[int],
-#                  classes: typing.List[int], shape: typing.Tuple[int]):
-#     final_boxes = []
-#     for i, c in reversed(list(enumerate(classes))):
-#         box = boxes[i]
-#         top, left, bottom, right = box
-#         final_boxes.append([left, top, right, bottom])
-#     return final_boxes

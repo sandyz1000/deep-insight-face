@@ -91,7 +91,7 @@ COLORS = [
 ]
 
 
-class ImageClass():
+class ImageClass:
     "Stores the paths to images for a given class"
 
     def __init__(self, name, image_paths):
@@ -184,33 +184,6 @@ def bbox_iou(box1, box2):
     return float(intersect) / union
 
 
-def croped_face(bb_boxes, image):
-    """
-    ### Helper method to crop detected and crop face for a given bounding box
-    :param bb_boxes: [description]
-    :type bb_boxes: [type]
-    :param image: [description]
-    :type image: [type]
-    :return: Return a numpy array of image
-    :rtype: numpy.ndarray
-    """
-    nrof_faces = len(bb_boxes)
-    if nrof_faces < 0:
-        return None
-    bounding_boxes = []
-    for box in bb_boxes:
-        temp_box = []
-        temp_box.insert(0, box.left)
-        temp_box.insert(1, box.bottom)
-        temp_box.insert(2, box.right)
-        temp_box.insert(3, box.top)
-        bounding_boxes.append(temp_box)
-    cropped = filter_bounding_box(image, nrof_faces, bounding_boxes,
-                                  do_save=False,
-                                  detect_multiple_faces=False)
-    return cropped.scaled_images
-
-
 def _interval_overlap(interval_a, interval_b):
     x1, x2 = interval_a
     x3, x4 = interval_b
@@ -276,7 +249,6 @@ def draw_boxes(image, boxes, labels, obj_thresh, quiet=True):
                         fontScale=1e-3 * image.shape[0],
                         color=(0, 0, 0),
                         thickness=2)
-
     return image
 
 

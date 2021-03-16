@@ -2,15 +2,13 @@ import os
 import random
 import itertools
 import numpy as np
-import threading
 from keras.utils import Sequence, to_categorical
-import tensorflow.python.keras.backend as K
 from ..common import image_aug
 from keras.applications.imagenet_utils import preprocess_input
 import tensorflow as tf
 from PIL import Image
 from ..common.image_aug import augment_img
-from ..utils import img_read_n_resize, add_extension, read_pairs, InvalidPairsError
+from ..common.utils import img_read_n_resize, add_extension, read_pairs, InvalidPairsError
 
 
 def sample_people(dataset, people_per_batch, images_per_person):
@@ -125,175 +123,6 @@ def create_pairs(img_dir_path, func=None, pairs_txt='pairs.txt'):
     return pairs, nb_classes, on_hot
 
 
-class FaceMatchDataGenerator(Sequence):
-    """
-    Return an Instance of keras.utils.Sequence. 
-    It's inherits keras.utils.Sequence which has all the goodies to iterate facial dataset
-    """
-    # ===========================================================================
-    # BELOW CODE AN IMPLEMENTATION OF SIMPLE TRIPLET AND SIAMESE DATAGENERATOR
-    # ===========================================================================
-
-    def __init__(self,
-                 image_paths,
-                 pairs_txt,
-                 rescale=1. / 255.,
-                 horizontal_flip=False,
-                 vertical_flip=False,
-                 preprocess_func=None,
-                 batch_size=64,
-                 target_size=(160, 160),
-                 shuffle=True, n_channels=3, seed=42, gray=False):
-        self.lock = threading.Lock()
-        data_format = K.image_data_format()
-        self.batch_size = batch_size
-        self.rescale = rescale
-        self.shuffle = shuffle
-        self.n_channels = n_channels
-        self.nb_classes = -1
-        self.target_size = target_size
-        self.pairs = []
-        self.indexes = []
-        self.PAIR = 2
-        self.gray = gray
-        self.horizontal_flip = horizontal_flip
-        self.vertical_flip = vertical_flip
-        self.preprocess_func = (lambda x, *args: preprocess_func(x, *args) if preprocess_func else x)
-        if data_format not in {'channels_last', 'channels_first'}:
-            raise ValueError('`data_format` should be `"channels_last"` (channel after row and '
-                             'column) or `"channels_first"` (channel before row and column). '
-                             'Received arg: ', data_format)
-        self.data_format = data_format
-        if data_format == 'channels_first':
-            self.channel_axis = 1
-            self.row_axis = 2
-            self.col_axis = 3
-        if data_format == 'channels_last':
-            self.channel_axis = 3
-            self.row_axis = 1
-            self.col_axis = 2
-
-        self.create_pairs(image_paths, pairs_txt)
-        self.on_epoch_end()
-
-    def on_epoch_end(self):
-        self.indexes = np.arange(len(self.pairs))
-        if self.shuffle:
-            np.random.shuffle(self.indexes)
-
-    def __data_generation__(self, indices):
-        raise NotImplementedError(
-            f"Method {self.__data_generation__.name} should be implementated by child class")
-
-    def create_pairs(self, img_dir_path, pairs_txt='pairs.txt'):
-        raise NotImplementedError(
-            f"Method {self.create_pairs.__name__} should be implementated by child class")
-
-    def __getitem__(self, index):
-        # Generate indexes of the batch
-        indexes = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
-        # Generate data
-        X, y = self.__data_generation__(indexes)
-        return X, y
-
-    def __len__(self):
-        # 'Denotes the number of batches per epoch'
-        # This also denotes default steps-per-epoch
-        return int(np.floor(len(self.pairs) / self.batch_size))
-
-
-class SiameseDataGenerator(FaceMatchDataGenerator):
-    """
-    Siamese Datagenerator that create a pairs of in a format of 
-    (anchor, negative) -> 0 and (anchor, positive) -> 1
-    """
-
-    def create_pairs(self, img_dir_path, pairs_txt):
-        '''
-        Positive and negative pair creation.
-        Alternates between positive and negative pairs.
-        '''
-        # Convert test image to bin for evaluation
-        self.pairs, self.nb_classes, self.on_hot = create_pairs(
-            img_dir_path, func=facematch_image_pairs, pairs_txt=pairs_txt
-        )
-
-    def __data_generation__(self, indices):
-        X = np.zeros((self.batch_size, self.PAIR, *self.target_size, self.n_channels))
-        y = np.zeros((self.batch_size), dtype=int)
-
-        # Generate data
-        for i, ID in enumerate(indices):
-            pair = self.pairs[ID]
-            img_pairs = [img_read_n_resize(p, self.target_size, self.rescale) for p in [pair[0], pair[1]]]
-            if self.gray:
-                img_pairs = [image_aug.rgb_to_grayscale(x) for x in img_pairs]
-            if self.preprocess_func:
-                img_pairs = [self.preprocess_func(x, 2) for x in img_pairs]
-
-            if self.vertical_flip:
-                img_pairs = [image_aug.flip_axis(x, self.col_axis - 1) for x in img_pairs]
-            if self.horizontal_flip:
-                img_pairs = [image_aug.flip_axis(x, self.row_axis - 1) for x in img_pairs]
-
-            is_same = pair[2]
-            X[i, ...] = np.array(img_pairs)
-            y[i, ...] = is_same
-
-        X = np.split(X, self.PAIR, axis=1)
-        X = list(map(lambda item: np.squeeze(item), X))
-        return X, y
-
-
-class TripletGenerator(FaceMatchDataGenerator):
-    """A Simple triplet Data generator for training triplets of faces/images
-    with a predifined pairs of faces, an alternatives option to use batch hard triplet
-    generator for optimized training on the negative sets
-    """
-
-    def __init__(self, *args, **kwargs):
-        super(TripletGenerator, self).__init__(*args, **kwargs)
-        self.PAIR = 3
-
-    def __data_generation__(self, indices):
-        X = np.zeros((self.batch_size, self.PAIR, *self.target_size, self.n_channels))
-        y = np.zeros((self.batch_size), dtype=int)
-
-        for i, ID in enumerate(indices):
-            pair = self.pairs[ID]
-            # NOTE: Always use RGB format while training
-            img_pairs = [img_read_n_resize(p, self.target_size, self.rescale) for p in pair]
-            if self.gray:
-                img_pairs = [image_aug.rgb_to_grayscale(x) for x in img_pairs]
-            if self.preprocess_func:
-                img_pairs = [self.preprocess_func(x, 2) for x in img_pairs]
-
-            if self.vertical_flip:
-                img_pairs = [image_aug.flip_axis(x, self.col_axis - 1) for x in img_pairs]
-            if self.horizontal_flip:
-                img_pairs = [image_aug.flip_axis(x, self.row_axis - 1) for x in img_pairs]
-            X[i, ...] = np.array(img_pairs)
-            y[i, ...] = 1
-
-        X = np.split(X, self.PAIR, axis=1)
-        X = list(map(lambda item: np.squeeze(item), X))
-
-        return X, y
-
-    def create_pairs(self, img_dir_path, pairs_txt):
-        '''
-        Positive and negative pair creation.
-        Alternates between positive and negative pairs.
-        '''
-        # Convert test image to bin for evaluation
-        self.pairs, self.nb_classes, self.on_hot = create_pairs(
-            img_dir_path, func=triplet_image_pairs, pairs_txt=pairs_txt
-        )
-
-    def _num_classes(self):
-        return [i for i in self.pairs]
-
-
 def triplet_datagenerator(img_dir_path,
                           pairs_txt,
                           rescale=1. / 255.,
@@ -309,9 +138,9 @@ def triplet_datagenerator(img_dir_path,
     pairs = list(zip(img_pairs, nb_classes, on_hot))
     random.shuffle(pairs)
     zipped = itertools.cycle(pairs)
-    
+
     def _read_img(p: str):
-        img = img_read_n_resize(p, target_size, rescale=1.0)
+        img = img_read_n_resize(p, target_size, rescale=1 / 255.0)
         if gray:
             img = image_aug.rgb_to_grayscale(img, channels=n_channels)
         return img
@@ -326,13 +155,13 @@ def triplet_datagenerator(img_dir_path,
             im1, im2, im3 = (np.array(_read_img(img), dtype=np.uint8) for img in img_pairs)
 
             if do_augment:
-                im1, im2, im3 = [augment_img(im) for im in [im1, im2, im3]]
+                im1, im2, im3 = [augment_img(im, augmentation_name='non_geometric') for im in [im1, im2, im3]]
 
             X.append(np.array([im1, im2, im3], dtype=np.uint8))
             Y.append(on_hot)
 
         X, Y = preprocess_input(np.array(X)), np.array(Y)
-        
+
         yield X, Y
 
 
@@ -343,7 +172,7 @@ def facematch_datagenerator(img_dir_path,
                             batch_size=64,
                             target_size=(160, 160),
                             n_channels=3, gray=False):
-    
+
     img_pairs, nb_classes, on_hot = create_pairs(
         img_dir_path, func=facematch_image_pairs, pairs_txt=pairs_txt
     )
@@ -351,7 +180,7 @@ def facematch_datagenerator(img_dir_path,
     pairs = list(zip(img_pairs, nb_classes, on_hot))
     random.shuffle(pairs)
     zipped = itertools.cycle(pairs)
-    
+
     def _read_img(p: str):
         img = img_read_n_resize(p, target_size, rescale=1.0)
         if gray:
@@ -372,13 +201,13 @@ def facematch_datagenerator(img_dir_path,
 
             X.append(np.array([im1, im2], dtype=np.uint8))
             Y.append(on_hot)
-        
+
         X, Y = preprocess_input(np.array(X)), np.array(Y)
-        
+
         yield X, Y
 
 
-def get_train_dataset(pairs_txt: str, img_dir_path: str, generator_fn: tf.keras.utils.Sequence,
+def get_train_dataset(pairs_txt: str, img_dir_path: str, generator_fn: iter,
                       img_shape=(160, 160, 3), is_train=True, batch_size=64):
     """
     Function to convert Keras Sequence to tensorflow dataset

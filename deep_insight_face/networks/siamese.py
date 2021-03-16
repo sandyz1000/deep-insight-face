@@ -4,9 +4,7 @@ import keras.layers as KL
 import keras.optimizers as KO
 from keras import backend as K
 import tensorflow as tf
-from keras.applications.vgg16 import VGG16
-from keras.applications import ResNet50V2, MobileNetV2
-# from keras.preprocessing.image import img_to_array
+from keras.applications import ResNet50V2, MobileNetV2, VGG16
 
 
 def euclidean_distance(vects):
@@ -55,33 +53,30 @@ class bottleneck_network:
     '''Base network to be shared (eq. to feature extraction).
     '''
 
-    def __init__(self, net="resnet", emd_size=128, input_shape=(112, 112, 3), use_keras_bn=False, **kwargs):
+    def __init__(self, net="resnet", emd_size=128, input_shape=(112, 112, 3), **kwargs):
         assert net in ('mobilenet', 'resnet', 'vgg16'), "Invalid bottleneck network"
         self.net = net
         self.emd_size = emd_size
         self.input_shape = input_shape
-        self.use_keras_bn = use_keras_bn
         self.kwargs = kwargs
 
-    def __call__(self, dropout=1):
-        if self.net == "vgg16":
-            return self._vgg_bottleneck(dropout=dropout)
-        elif self.use_keras_bn or self.net in ('mobilenet', 'resnet'):
-            return self._kbottleneck(dropout=dropout)
-        else:
-            raise ValueError("Unable to invoke set use_keras_bn=True during initilization.")
-            
-    def _kbottleneck(self, dropout=0.3):
-        _layers = []
+    def __call__(self, default_model='v1', dropout=0.2):
+        base_model = getattr(self, 'build_models_' + default_model)(dropout=dropout)
+        return base_model
 
+    def __get_bottleneck(self, ):
         if self.net == "mobilenet":
-            _layers.append(MobileNetV2(input_shape=self.input_shape, include_top=False, weights='imagenet'))
+            bottleneck = MobileNetV2(input_shape=self.input_shape, include_top=False, weights='imagenet')
         elif self.net == "resnet":
-            _layers.append(ResNet50V2(input_shape=self.input_shape, include_top=False, weights='imagenet'))
-        else:
-            raise AttributeError("Invalid bottleneck network: ", self.net)
+            bottleneck = ResNet50V2(input_shape=self.input_shape, include_top=False, weights='imagenet')
+        elif self.net == "vgg16":
+            bottleneck = VGG16(include_top=False, weights='imagenet', input_shape=self.input_shape)
 
-        _layers += [
+        return bottleneck
+
+    def build_models_v1(self, dropout=0.3):
+        sequentials = [self.__get_bottleneck()]
+        sequentials += [
             KL.Conv2D(filters=64, kernel_size=2, padding='same', activation='relu'),
             KL.MaxPooling2D(pool_size=2),
             KL.Dropout(0.3),
@@ -91,33 +86,32 @@ class bottleneck_network:
             KL.Flatten(name='flatten'),
             KL.Dense(self.emd_size, activation=None, name="embeddings")
         ]
-        base_model = Sequential(_layers)
+        base_model = Sequential(sequentials)
         # base_model.layers[0].trainable = False
         return base_model
 
-    def _vgg_bottleneck(self, dropout=1.0):
+    def build_models_v2(self, dropout=1.0):
         from keras.regularizers import l2
-        vgg16_model = VGG16(include_top=False, weights='imagenet', input_shape=self.input_shape)
-        
-        # vgg16_model.trainable = False
-        # for layer in vgg16_model.layers[-4:]:
-        #     layer.trainable = True
-        out = vgg16_model.output
-
-        out = KL.Conv2D(128, (1, 1), activation='relu', kernel_initializer=initialize_weights,
-                        bias_initializer=initialize_bias, kernel_regularizer=l2(2e-4))(out)
-        out = KL.MaxPooling2D(padding='same')(out)
-        out = KL.Conv2D(128, (1, 1), activation='relu', kernel_initializer=initialize_weights,
-                        bias_initializer=initialize_bias, kernel_regularizer=l2(2e-4))(out)
-        out = KL.MaxPooling2D(padding='same')(out)
-
-        x = KL.BatchNormalization(name="bn")(out)
-        x = KL.Flatten()(out)
-        x = KL.Dense(self.emd_size, activation='relu')(x)
-        if 0 < dropout < 1:
-            x = KL.Dropout(dropout)(x)
-        x = KL.Dense(self.emd_size, activation='relu', name="norm_embedding")(x)
-        return Model(vgg16_model.input, x)
+        layers = [self.__get_bottleneck()]
+        layers += [
+            KL.Conv2D(128, (1, 1), activation='relu',
+                      kernel_initializer=initialize_weights,
+                      bias_initializer=initialize_bias, kernel_regularizer=l2(2e-4)
+                      ),
+            KL.MaxPooling2D(padding='same'),
+            KL.Conv2D(128, (1, 1), activation='relu',
+                      kernel_initializer=initialize_weights,
+                      bias_initializer=initialize_bias, kernel_regularizer=l2(2e-4)
+                      ),
+            KL.MaxPooling2D(padding='same'),
+            KL.BatchNormalization(name="bn"),
+            KL.Flatten(),
+            KL.Dropout(dropout),
+            KL.Dense(self.emd_size, activation='relu', name="norm_embedding")
+        ]
+        base_model = Sequential(layers)
+        # base_model.layers[0].trainable = False
+        return base_model
 
 
 def buildin_models(emd_size=128, input_shape=(112, 112, 3), summary=False, **kwargs):
@@ -128,7 +122,7 @@ def buildin_models(emd_size=128, input_shape=(112, 112, 3), summary=False, **kwa
     """
     assert len(input_shape) == 3, "Invalid input shape"
     # network definition
-    base_model = bottleneck_network(emd_size, input_shape, **kwargs)()
+    base_model = bottleneck_network(emd_size, input_shape, **kwargs)(default_model='v1')
     input_a = KL.Input(shape=input_shape)
     input_b = KL.Input(shape=input_shape)
 

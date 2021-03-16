@@ -39,7 +39,7 @@ def calc_mean_score(score_dist):
     return (score_dist * np.arange(1, 11)).sum()
 
 
-def set_GPU_limit(limit=2):
+def set_gpu_limit(limit=2):
     import tensorflow as tf
     gpus = tf.config.experimental.list_physical_devices('GPU')
     if len(gpus) > 0:

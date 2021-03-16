@@ -111,3 +111,11 @@ def get_dyanamic_image_path(top, filename, suffix):
     return dynamic_path if is_file_exists(dynamic_path) else None
 
 
+def save_img(img):
+    # NOTE: Enable for debugging purpose
+    import cv2
+    from tempfile import NamedTemporaryFile
+    _tempdir = os.path.abspath(os.path.expanduser("~") + os.sep + "tmp")
+    with NamedTemporaryFile(prefix="facthumb", dir=_tempdir) as f:
+        f.name += f.name + ".png"
+        cv2.imwrite(f.name, img)

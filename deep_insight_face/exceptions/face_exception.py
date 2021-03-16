@@ -1,5 +1,5 @@
 
-class FaceRecognitionExceptoion(BaseException):
+class FaceRecognitionException(BaseException):
     """ Base exception for Face recognition module
 
     Arguments:
