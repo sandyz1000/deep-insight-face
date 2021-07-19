@@ -52,7 +52,8 @@ class Train:
             train_data.img_path,
             train_data.pairs,
             batch_size=batch_size,
-            target_size=self.input_shape[:-1])
+            target_size=self.input_shape[:-1]
+        )
 
         history = self.model.fit(
             x_train,

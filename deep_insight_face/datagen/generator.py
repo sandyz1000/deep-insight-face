@@ -1,5 +1,6 @@
 import os
 import random
+import typing
 import itertools
 import numpy as np
 from keras.utils import Sequence, to_categorical
@@ -7,8 +8,8 @@ from ..common import image_aug
 from keras.applications.imagenet_utils import preprocess_input
 import tensorflow as tf
 from PIL import Image
-from ..common.image_aug import augment_img
-from ..common.utils import img_read_n_resize, add_extension, read_pairs, InvalidPairsError
+from deep_insight_face.common.image_aug import augment_img
+from deep_insight_face.common.utils import img_read_n_resize, add_extension, read_pairs, InvalidPairsError
 
 
 def sample_people(dataset, people_per_batch, images_per_person):
@@ -40,7 +41,7 @@ def sample_people(dataset, people_per_batch, images_per_person):
     return image_paths, num_per_class
 
 
-def triplet_image_pairs(img_dir_path, pairs):
+def triplet_image_pairs(img_dir_path: str, pairs: str):
     path_pairs = []
     nb_classes = set()
     nrof_skipped_pairs = 0
@@ -123,13 +124,15 @@ def create_pairs(img_dir_path, func=None, pairs_txt='pairs.txt'):
     return pairs, nb_classes, on_hot
 
 
-def triplet_datagenerator(img_dir_path,
-                          pairs_txt,
-                          rescale=1. / 255.,
-                          do_augment=True,
-                          batch_size=64,
-                          target_size=(160, 160),
-                          n_channels=3, gray=False):
+def triplet_datagenerator(
+    img_dir_path: str,
+    pairs_txt: str,
+    rescale: float = 1. / 255.,
+    do_augment: bool = True,
+    batch_size: int = 64,
+    target_size: typing.Tuple[int] = (160, 160),
+    n_channels: int = 3, gray: bool = False
+) -> typing.Iterator:
 
     img_pairs, nb_classes, on_hot = create_pairs(
         img_dir_path, func=facematch_image_pairs, pairs_txt=pairs_txt
@@ -165,13 +168,15 @@ def triplet_datagenerator(img_dir_path,
         yield X, Y
 
 
-def facematch_datagenerator(img_dir_path,
-                            pairs_txt,
-                            rescale=1. / 255.,
-                            do_augment=True,
-                            batch_size=64,
-                            target_size=(160, 160),
-                            n_channels=3, gray=False):
+def facematch_datagenerator(
+    img_dir_path: str,
+    pairs_txt: str,
+    rescale: float = 1. / 255.,
+    do_augment: bool = True,
+    batch_size: int = 64,
+    target_size: typing.Tuple[int] = (160, 160),
+    n_channels: int = 3, gray: bool = False
+) -> typing.Iterator:
 
     img_pairs, nb_classes, on_hot = create_pairs(
         img_dir_path, func=facematch_image_pairs, pairs_txt=pairs_txt

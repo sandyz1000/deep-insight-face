@@ -173,7 +173,7 @@ def generate_pairs(
     return matches, mismatches
 
 
-def _cli() -> None:
+def main() -> None:
     args = _parse_arguments()
     generate_pairs(
         args.image_dir,
@@ -205,4 +205,4 @@ def _parse_arguments() -> Namespace:
 
 
 if __name__ == '__main__':
-    _cli()
+    main()

@@ -1,10 +1,22 @@
+import typing
+from dataclasses import dataclass
 import numpy as np
 from keras.models import Model, Sequential
 import keras.layers as KL
 import keras.optimizers as KO
-from keras import backend as K
+from tensorflow.keras import backend as K
 import tensorflow as tf
-from keras.applications import ResNet50V2, MobileNetV2, VGG16
+from tensorflow.keras.applications import ResNet50V2, MobileNetV2, VGG16
+
+
+class SiameseConfig(typing.NamedTuple):
+    model: tf.keras.Model = None
+    vgg16_include_top: bool = False
+    labels: str = None
+    config: str = None
+    input_shape: typing.Tuple = None
+    threshold: float = 0.5
+    vgg16_model: tf.keras.Model = None
 
 
 def euclidean_distance(vects):
@@ -17,7 +29,7 @@ def eucl_dist_output_shape(shapes):
     return (shape1[0], 1)
 
 
-def contrastive_loss(y_true, y_pred):
+def contrastive_loss(y_true: tf.Tensor, y_pred: tf.Tensor):
     '''Contrastive loss from Hadsell-et-al.'06
     http://yann.lecun.com/exdb/publis/pdf/hadsell-chopra-lecun-06.pdf
     '''
@@ -27,7 +39,7 @@ def contrastive_loss(y_true, y_pred):
                   (1 - y_true) * K.square(K.maximum(margin - y_pred, 0)))
 
 
-def _accuracy(y_true, y_pred, threshold=0.4):
+def _accuracy(y_true: tf.Tensor, y_pred: tf.Tensor, threshold=0.4):
     '''Compute classification accuracy with a fixed threshold on distances.
     '''
     return K.mean(K.equal(y_true, K.cast(y_pred < threshold, y_true.dtype)))
@@ -61,7 +73,9 @@ class bottleneck_network:
         self.kwargs = kwargs
 
     def __call__(self, default_model='v1', dropout=0.2):
-        base_model = getattr(self, 'build_models_' + default_model)(dropout=dropout)
+        attr_name = 'build_models_' + default_model
+        assert hasattr(self, attr_name), "Invalid default model version, must be from options (v1, v2)"
+        base_model = getattr(self, attr_name)(dropout=dropout)
         return base_model
 
     def __get_bottleneck(self, ):
@@ -74,7 +88,7 @@ class bottleneck_network:
 
         return bottleneck
 
-    def build_models_v1(self, dropout=0.3):
+    def build_models_v1(self, dropout: float = 0.3):
         sequentials = [self.__get_bottleneck()]
         sequentials += [
             KL.Conv2D(filters=64, kernel_size=2, padding='same', activation='relu'),
@@ -90,7 +104,7 @@ class bottleneck_network:
         # base_model.layers[0].trainable = False
         return base_model
 
-    def build_models_v2(self, dropout=1.0):
+    def build_models_v2(self, dropout: float = 1.0):
         from keras.regularizers import l2
         layers = [self.__get_bottleneck()]
         layers += [
@@ -114,7 +128,12 @@ class bottleneck_network:
         return base_model
 
 
-def buildin_models(emd_size=128, input_shape=(112, 112, 3), summary=False, **kwargs):
+def buildin_models(
+    emd_size: int = 128,
+    input_shape: typing.Tuple[int] = (112, 112, 3),
+    summary: bool = False, 
+    **kwargs
+) -> typing.Tuple[tf.keras.Model, tf.keras.Model]:
     """
     --------------------------------
     Siamese Face Net
@@ -140,13 +159,3 @@ def buildin_models(emd_size=128, input_shape=(112, 112, 3), summary=False, **kwa
     # model.compile(loss="binary_crossentropy", optimizer=optimizer)
     print(model.summary() if summary else ">>>>>>> Siamese MODEL Loaded >>>>>>>")
     return model, base_model
-
-
-class SiameseConfig(object):
-    model = None
-    vgg16_include_top = False
-    labels = None
-    config = None
-    input_shape = None
-    threshold = 0.5
-    vgg16_model = None
