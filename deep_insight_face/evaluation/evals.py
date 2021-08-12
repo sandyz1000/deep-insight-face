@@ -6,6 +6,7 @@ is calculated and plotted...
 """
 import numpy as np
 from ..datagen.generator import FaceMatchDataGenerator
+from deep_insight_face.datagen.generator import triplet_datagenerator
 import os
 from typing import Any
 from sklearn import metrics
@@ -17,9 +18,10 @@ from . import utility
 
 def evaluate(emd_model, image_paths, pairs,
              batch_size, nrof_folds, distance_metric,
-             subtract_mean=False, use_flipped_images=False,
+             subtract_mean=False, 
              use_fixed_image_standardization=False,
-             use_image_aug_random=False, save_output_detail=False):
+             use_image_aug_random=False, 
+             save_output_detail=False):
     # Run forward pass to calculate embeddings
 
     def preprocess_func(img):
@@ -31,11 +33,13 @@ def evaluate(emd_model, image_paths, pairs,
 
     # embedding_size = int(emd_model.get_shape()[1])
     embedding_size = 128
-    generator = FaceMatchDataGenerator(image_paths, pairs,
-                                       preprocess_func=preprocess_func,
-                                       horizontal_flip=use_flipped_images,
-                                       batch_size=batch_size,
-                                       embedding_size=embedding_size)
+    generator = triplet_datagenerator(
+        image_paths, pairs,
+        do_augment=True,
+        batch_size=batch_size,
+        target_size=(160, 160),
+        n_channels=3,
+    )
 
     nrof_images = len(generator)
     emb_arr = np.zeros((nrof_images, embedding_size))
@@ -105,5 +109,3 @@ class result_to_csv:
 
             utility.print_confusion_matrix(results, threshold)
         return results
-
-

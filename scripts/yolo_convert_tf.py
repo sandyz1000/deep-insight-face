@@ -35,7 +35,8 @@ def unique_config_sections(config_file):
     return output_stream
 
 
-def _main_(args):
+def convert_yolo_to_tf(args):
+    """ Convert YOLOv3 weight to Tensorflow/Keras format """
     config_path = os.path.expanduser(args.config_path)
     weights_path = os.path.expanduser(args.weights_path)
     assert config_path.endswith('.cfg'), '{} is not a .cfg file'.format(config_path)
@@ -245,4 +246,4 @@ if __name__ == '__main__':
     parser.add_argument('-w', '--weights_only',
                         help='Save as Keras weights file instead of model file.',
                         action='store_true')
-    _main_(parser.parse_args())
+    convert_yolo_to_tf(parser.parse_args())

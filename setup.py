@@ -7,7 +7,14 @@ requirements = open("requirements.txt", 'r').readlines()
 
 setup(
     name="deep-insight-face",
-    scripts=["scripts/insight_face"],
+    entry_points={
+        'console_script': [
+            "deepface_generate_pairs=scripts.generate_pairs:main",
+            "deepface_raw_img_tfbinary=scripts.raw_img_tf:main",
+            "deepface_yolo_wt_convert=scripts.yolo_convert_tf:main",
+            "deep_insight_face=scripts.insight_face:main",
+        ],
+    },
     version="0.1.0",
     description="Deep Insight Face",
     long_description=long_description,

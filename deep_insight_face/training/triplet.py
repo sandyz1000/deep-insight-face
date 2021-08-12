@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 from PIL import Image
+import typing
 import matplotlib.pyplot as plt
 from keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping
 # from ..handlers.evals import eval_callback
@@ -23,7 +24,7 @@ class Train:
         # Check training mode before initialization
         # assert mode in (model_choice.simple_triplet_nw, model_choice.semihard_triplet_nw), \
         #     "Invalid training function, other loss fn currently not supported"
-        assert mode == model_choice.simple_triplet_nw, \
+        assert mode == model_choice.multi_headed_triplet_loss, \
             "Invalid training function, other loss fn currently not supported"
         self.model_path = model_path
         self.input_shape = input_shape
@@ -62,7 +63,8 @@ class Train:
             rescale=1. / 255,
             shear_range=0.2,
             zoom_range=0.2,
-            horizontal_flip=True)
+            horizontal_flip=True
+        )
 
         x_train = x_train_gen.flow_from_directory(
             train_data.img_path,
@@ -101,7 +103,7 @@ class Train:
             # eval_callback(self.model, val_binfile, image_path=val_image_path,
             #               pairs_txt=val_pairs_txt, batch_size=batch_size)
         ]
-        if self.mode == model_choice.simple_triplet_nw:
+        if self.mode == model_choice.multi_headed_triplet_loss:
             history = self.__train_simpletriplet(train_data, batch_size, epochs, callbacks)
         else:
             history = self.__train_semihardtriplet(train_data, batch_size, epochs, callbacks)
