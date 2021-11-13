@@ -5,7 +5,7 @@ Embeddings are calculated using the pairs from http://vis-www.cs.umass.edu/lfw/p
 is calculated and plotted...
 """
 import numpy as np
-from ..datagen.generator import FaceMatchDataGenerator
+from ..datagen.generator import facematch_datagenerator
 from deep_insight_face.datagen.generator import triplet_datagenerator
 import os
 from typing import Any
@@ -16,62 +16,76 @@ from csv import writer
 from . import utility
 
 
-def evaluate(emd_model, image_paths, pairs,
-             batch_size, nrof_folds, distance_metric,
-             subtract_mean=False, 
-             use_fixed_image_standardization=False,
-             use_image_aug_random=False, 
-             save_output_detail=False):
-    # Run forward pass to calculate embeddings
+class TripletEvaluate:
+    def __init__(
+        self, 
+        emd_model, image_paths, pairs,
+    ) -> None:
+        self.emd_model = emd_model
+        self.image_paths = image_paths
+        self.pairs = pairs
+        
+    def __call__(
+        self,
+        batch_size, nrof_folds, distance_metric,
+        subtract_mean=False,
+        use_fixed_image_standardization=False,
+        use_image_aug_random=False,
+        save_output_detail=False
+    ):
+        # Run forward pass to calculate embeddings
 
-    def preprocess_func(img):
-        if use_fixed_image_standardization:
-            img = FaceMatchDataGenerator.image_standardization(img)
-        if use_image_aug_random:
-            img = FaceMatchDataGenerator.image_aug_random(img)
-        return img
+        # embedding_size = int(emd_model.get_shape()[1])
+        embedding_size = 128
+        generator = triplet_datagenerator(
+            self.image_paths, self.pairs,
+            do_augment=True,
+            batch_size=batch_size,
+            target_size=(160, 160),
+            n_channels=3,
+        )
 
-    # embedding_size = int(emd_model.get_shape()[1])
-    embedding_size = 128
-    generator = triplet_datagenerator(
-        image_paths, pairs,
-        do_augment=True,
-        batch_size=batch_size,
-        target_size=(160, 160),
-        n_channels=3,
-    )
+        nrof_images = len(generator)
+        emb_arr = np.zeros((nrof_images, embedding_size))
+        lab_arr = np.zeros((nrof_images,))
+        paths_arr = []
+        idx = 0
+        for X_batch, y in next(generator):
+            lab = np.arange(idx, idx + len(y))
+            idx += len(y)
+            emb = self.emd_model.predict_on_batch(X_batch)
+            lab_arr[lab] = y
+            emb_arr[lab, :] = emb
+            paths_arr += generator.pairs[lab]
 
-    nrof_images = len(generator)
-    emb_arr = np.zeros((nrof_images, embedding_size))
-    lab_arr = np.zeros((nrof_images,))
-    paths_arr = []
-    idx = 0
-    for X_batch, y in next(generator):
-        lab = np.arange(idx, idx + len(y))
-        idx += len(y)
-        emb = emd_model.predict_on_batch(X_batch)
-        lab_arr[lab] = y
-        emb_arr[lab, :] = emb
-        paths_arr += generator.pairs[lab]
+        assert np.array_equal(lab_arr, np.arange(nrof_images)) is True, \
+            'Wrong labels used for evaluation, possibly caused by training examples left in the input pipeline'
+        tpr, fpr, accuracy, f1scores, val, val_std, far = utility.evaluate(
+            emb_arr, lab_arr, nrof_folds=nrof_folds, distance_metric=distance_metric, subtract_mean=subtract_mean)
 
-    assert np.array_equal(lab_arr, np.arange(nrof_images)) is True, \
-        'Wrong labels used for evaluation, possibly caused by training examples left in the input pipeline'
-    tpr, fpr, accuracy, f1scores, val, val_std, far = utility.evaluate(
-        emb_arr, lab_arr, nrof_folds=nrof_folds, distance_metric=distance_metric, subtract_mean=subtract_mean)
+        print('Accuracy: %2.5f+-%2.5f' % (np.mean(accuracy), np.std(accuracy)))
+        print('Validation rate: %2.5f+-%2.5f @ FAR=%2.5f' % (val, val_std, far))
+        print("F1 Score: %2.5f+-%2.5f" % (np.mean(f1scores), np.std(f1scores)))
+        auc = metrics.auc(fpr, tpr)
+        print('Area Under Curve (AUC): %1.3f' % auc)
+        eer = brentq(lambda x: 1. - x - interpolate.interp1d(fpr, tpr, fill_value="extrapolate")(x), 0., 1.)
+        print('Equal Error Rate (EER): %1.3f' % eer)
 
-    print('Accuracy: %2.5f+-%2.5f' % (np.mean(accuracy), np.std(accuracy)))
-    print('Validation rate: %2.5f+-%2.5f @ FAR=%2.5f' % (val, val_std, far))
-    print("F1 Score: %2.5f+-%2.5f" % (np.mean(f1scores), np.std(f1scores)))
-    auc = metrics.auc(fpr, tpr)
-    print('Area Under Curve (AUC): %1.3f' % auc)
-    eer = brentq(lambda x: 1. - x - interpolate.interp1d(fpr, tpr, fill_value="extrapolate")(x), 0., 1.)
-    print('Equal Error Rate (EER): %1.3f' % eer)
+        print('>>>> ============== >>>>')
+        if save_output_detail:
+            csv_out = result_to_csv(emb_arr, lab_arr, paths_arr, tpr, fpr,
+                                    accuracy, f1scores, val, val_std, far)
+            csv_out(0.3)
 
-    print('>>>> ============== >>>>')
-    if save_output_detail:
-        csv_out = result_to_csv(emb_arr, lab_arr, paths_arr, tpr, fpr,
-                                accuracy, f1scores, val, val_std, far)
-        csv_out(0.3)
+
+class SiameseEvaluate:
+    def __init__(self, emd_model, image_paths, pairs,) -> None:
+        self.emd_model = emd_model
+        self.image_paths = image_paths
+        self.pairs = pairs
+
+    def __call__(self, *args: Any, **kwds: Any) -> Any:
+        pass
 
 
 class result_to_csv:

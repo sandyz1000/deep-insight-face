@@ -3,8 +3,12 @@ import scipy.ndimage as ndi
 import math
 import sys
 import cv2
+import enum
 from skimage import exposure
 import tensorflow as tf
+import typing as t
+from PIL import Image
+from typing import Union, Callable
 try:
     import imgaug as ia
     from imgaug import augmenters as iaa
@@ -14,38 +18,49 @@ except ImportError:
     sys.exit(1)
 
 
+class AUGMENTATION_OPTIONS(enum.Enum):
+    all = 1
+    both = 2
+    default = 3
+    geometric = 4
+    non_geometric = 5
+
+    @classmethod
+    def _list_fields(cls):
+        return list(v.name for k, v in cls._value2member_map_.items())
+
+
 def image_aug_random(img):
     p2, p98 = np.percentile(img, (2, 98))
     x = exposure.rescale_intensity(img, in_range=(p2, p98))
     return x
 
 
-def random_crop(img, crop_dims):
-    h, w = img.shape[0], img.shape[1]
-    ch, cw = crop_dims[0], crop_dims[1]
+def random_crop(img: tf.Tensor, crop_dims: tf.Tensor) -> tf.Tensor:
+    h, w, _ = img.get_shape()
+    ch, cw, _ = crop_dims.get_shape()
     assert h >= ch, 'image height is less than crop height'
     assert w >= cw, 'image width is less than crop width'
-    x = np.random.randint(0, w - cw + 1)
-    y = np.random.randint(0, h - ch + 1)
+    x = tf.random.uniform(shape=(), minval=0, maxval=(w - cw + 1), dtype=tf.int32)
+    y = tf.random.uniform(shape=(), minval=0, maxval=(h - ch + 1), dtype=tf.int32)
     return img[y:(y + ch), x:(x + cw), :]
 
 
-def random_horizontal_flip(img):
+def random_horizontal_flip(img: tf.Tensor) -> tf.Tensor:
     assert len(img.shape) == 3, 'input tensor must have 3 dimensions (height, width, channels)'
-    assert img.shape[2] == 3, 'image not in channels last format'
     if np.random.random() < 0.5:
-        img = img.swapaxes(1, 0)
+        img = tf.transpose(img, perm=[1, 0, 2])
         img = img[::-1, ...]
-        img = img.swapaxes(0, 1)
+        img = tf.transpose(img, perm=[0, 1, 2])
     return img
 
 
-def random_vertical_flip(img):
+def random_vertical_flip(img: tf.Tensor) -> tf.Tensor:
     assert len(img.shape) == 3, 'input tensor must have 3 dimensions (height, width, channels)'
     if np.random.random() < 0.5:
-        img = img.swapaxes(0, 0)
+        img = tf.transpose(img, perm=[0, 1, 2])
         img = img[::-1, ...]
-        img = img.swapaxes(0, 0)
+        img = tf.transpose(img, perm=[0, 1, 2])
     return img
 
 
@@ -611,88 +626,131 @@ def _apply_aug_all():
     )
 
 
-def _augment_seg(img, seg, augmentation_name, prefix="_apply_aug"):
-
-    IMAGE_AUGMENTATION_SEQUENCE = getattr(sys.modules[__name__], f"{prefix}_{augmentation_name}", None)
-
-    # Create a deterministic augmentation from the random one
-    aug_det = IMAGE_AUGMENTATION_SEQUENCE.to_deterministic()
-    # Augment the input image
-    image_aug = aug_det.augment_image(img)
-
-    segmap = ia.SegmentationMapOnImage(
-        seg, nb_classes=np.max(seg) + 1, shape=img.shape)
-    segmap_aug = aug_det.augment_segmentation_maps(segmap)
-    segmap_aug = segmap_aug.get_arr_int()
-
-    return image_aug, segmap_aug
-
-
-def _augment_keypoints(img, keypoints, augmentation_name, prefix="_apply_aug"):
-    IMAGE_AUGMENTATION_SEQUENCE = getattr(sys.modules[__name__], f"{prefix}_{augmentation_name}", None)
-
-    # Create a deterministic augmentation from the random one
-    aug_det = IMAGE_AUGMENTATION_SEQUENCE.to_deterministic()
-    # Augment the input image
-    image_aug = aug_det.augment_image(img)
-
-    keymap = ia.KeypointsOnImage(keypoints)
-    keymap_aug = aug_det.augment_keypoints(keypoints)
-
-    return image_aug, keymap_aug
-
-
-def _augment_img(num_tries, img, augmentation_name, prefix="_load_augmentation"):
-    IMAGE_AUGMENTATION_SEQUENCE = getattr(sys.modules[__name__], f"{prefix}_{augmentation_name}", None)
-
-    # Create a deterministic augmentation from the random one
-    aug_det = IMAGE_AUGMENTATION_SEQUENCE.to_deterministic()
-    image_aug = aug_det.augment_image(img)
-    return image_aug
-
-
 def _try_n_times(fn, n, *args, **kargs):
     """ Try a function N times """
     attempts = 0
     while attempts < n:
         try:
             return fn(*args, **kargs)
-        except Exception:
+        except Exception as e:
             attempts += 1
 
     return fn(*args, **kargs)
 
 
-def augment_seg(img, seg, augmentation_name="default", num_tries=IMAGE_AUGMENTATION_NUM_TRIES):
-    assert augmentation_name in AUGMENTATION_OPTIONS, "Invalid augmentation option"
+def _safe_augmentation(
+    image: Union[np.ndarray, tf.Tensor],
+    aug_func: Callable = None,
+    **kwargs,
+) -> Union[np.ndarray, tf.Tensor]:
+    """
+    Support for using with tensor/numpy Image, Incase the input image is tensor convert to numpy
+    apply augmentation and convert back to tensor.
+
+    Args:
+        img ([Union[np.ndarray, tf.Tensor]]): Input array that needs augmentation
+        aug_func ([Callable]): Sequence of imgaug.augmenters functions
+
+    Returns:
+        [type]: Return either tf.Tensor or np.ndarray
+    """
+    is_tensor = False
+    if isinstance(image, tf.Tensor):
+        is_tensor = True
+        image = image.numpy()
+    image_aug = aug_func(image=image, **kwargs)
+    return tf.convert_to_tensor(image_aug) if is_tensor else image_aug
+
+
+def _augment_seg(
+    img: np.ndarray,
+    seg: np.ndarray,
+    augmentation_name: str,
+    prefix="_apply_aug",
+    output_dim: t.Tuple[int, int] = ()
+):
+
+    augmentation_func = getattr(sys.modules[__name__], f"{prefix}_{augmentation_name}")
+
+    # Create a deterministic augmentation from the random one
+    aug_det = augmentation_func().to_deterministic()
+    if output_dim:
+        img = Image.fromarray(img).resize(output_dim, Image.BICUBIC)
+        img = np.array(img, dtype='uint8')
+    segmap = ia.SegmentationMapsOnImage(seg, nb_classes=np.max(seg) + 1, shape=img.shape)
+    # Augment the input image
+    image_aug, segmap = _safe_augmentation(image=img, segmentations=segmap, aug_func=aug_det)
+    
+    segmap_aug = segmap.get_arr_int()
+
+    return image_aug, segmap_aug
+
+
+def _augment_keypoints(
+    img: np.ndarray,
+    keypoints: t.List[ia.Keypoint],
+    augmentation_name: str = 'default',
+    output_dim: t.Tuple[int, int] = (),
+    prefix="_apply_aug"
+):
+    augmentation_func = getattr(sys.modules[__name__], f"{prefix}_{augmentation_name}")
+
+    # Create a deterministic augmentation from the random one
+    aug_det = augmentation_func().to_deterministic()
+    kpo_img = ia.KeypointsOnImage(keypoints, shape=img.shape[:-1])
+    # Augment the keypoints
+    image_aug, keymap_aug = _safe_augmentation(image=img, keypoints=kpo_img, aug_func=aug_det)
+    if output_dim:
+        assert len(output_dim) == 2, ValueError("Output dimension should be of lenght 2")
+        im = np.array(Image.fromarray(img).resize(output_dim, Image.BICUBIC), dtype='uint8')
+        keymap_aug = keymap_aug.on(im)
+    return image_aug, keymap_aug
+
+
+def _augment_img(img, augmentation_name='default', out_dim: t.Tuple[int, int] = (), prefix="_apply_aug"):
+    augmentation_func = getattr(sys.modules[__name__], f"{prefix}_{augmentation_name}")
+    # Create a deterministic augmentation from the random one
+    aug_det = augmentation_func().to_deterministic()
+    image_aug = _safe_augmentation(img, aug_det.augment_image)
+    return image_aug
+
+
+def augment_seg(
+    img: t.Union[np.ndarray, tf.Tensor],
+    seg: Union[np.ndarray, tf.Tensor],
+    augmentation_name: str = "default",
+    num_tries: int = IMAGE_AUGMENTATION_NUM_TRIES,
+    **kwargs
+) -> t.Tuple[np.ndarray, ia.SegmentationMapOnImage]:
+    assert augmentation_name in AUGMENTATION_OPTIONS._list_fields(), "Invalid augmentation option"
     return _try_n_times(
         _augment_seg, num_tries,
-        img, seg, augmentation_name=augmentation_name
+        img, seg, augmentation_name=augmentation_name, **kwargs
     )
 
 
-def augment_img(img, augmentation_name="default", num_tries=IMAGE_AUGMENTATION_NUM_TRIES):
-    assert augmentation_name in AUGMENTATION_OPTIONS, "Invalid augmentation option"
+def augment_img(
+    img: Union[np.ndarray, tf.Tensor],
+    augmentation_name: str = "default",
+    num_tries: int = IMAGE_AUGMENTATION_NUM_TRIES,
+    **kwargs
+) -> np.ndarray:
+    assert augmentation_name in AUGMENTATION_OPTIONS._list_fields(), "Invalid augmentation option"
     return _try_n_times(
         _augment_img, num_tries,
-        img, augmentation_name=augmentation_name
+        img, augmentation_name=augmentation_name, **kwargs
     )
 
 
-def augment_keypoints(img, keypoints, augmentation_name="default", num_tries=IMAGE_AUGMENTATION_NUM_TRIES):
-    assert augmentation_name in AUGMENTATION_OPTIONS, "Invalid augmentation option"
+def augment_keypoints(
+    img: Union[np.ndarray, tf.Tensor],
+    keypoints: Union[np.ndarray, tf.Tensor],
+    augmentation_name: str = "default",
+    num_tries: int = IMAGE_AUGMENTATION_NUM_TRIES,
+    **kwargs
+) -> t.Tuple[np.ndarray, ia.KeypointsOnImage]:
+    assert augmentation_name in AUGMENTATION_OPTIONS._list_fields(), "Invalid augmentation option"
     return _try_n_times(
         _augment_keypoints, num_tries,
-        img, _augment_keypoints, augmentation_name=augmentation_name
+        img, keypoints, augmentation_name=augmentation_name, **kwargs
     )
-
-
-class AUGMENTATION_TYPE:
-    all = "all"
-    both = "both"
-    default = "default"
-    geometric = "geometric"
-    non_geometric = 'non_geometric'
-
-
-AUGMENTATION_OPTIONS = ('all', 'both', 'default', 'geometric', 'non_geometric', )

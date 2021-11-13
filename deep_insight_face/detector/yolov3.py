@@ -105,7 +105,7 @@ def boxes_and_scores(feats, anchors, num_classes, input_shape,
     return boxes, box_scores
 
 
-def letterbox_image(image: np.ndarray, size: typing.Tuple[int]):
+def letterbox_image(image: Image, size: typing.Tuple[int]) -> Image:
     '''Resize image with unchanged aspect ratio using padding'''
     img_width, img_height = image.size
     w, h = size

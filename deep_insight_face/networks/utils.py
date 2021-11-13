@@ -47,7 +47,7 @@ def set_gpu_limit(limit=2):
             tf.config.experimental.set_virtual_device_configuration(gpus[0], [
                 tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024 * limit)]
             )
-            print(f"GPU Limit set to: {1024*limit} MB")
-        except RuntimeError as e:
-            print(e)
+            return f"GPU Limit set to: {1024*limit} MB"
+        except Exception as e:
+            raise e
 
