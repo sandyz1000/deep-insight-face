@@ -124,40 +124,52 @@ def create_pairs(img_dir_path, func=None, pairs_txt='pairs.txt'):
     return pairs, nb_classes, on_hot
 
 
-def triplet_datagenerator(
-    img_dir_path: str,
-    pairs_txt: str,
-    rescale: float = 1. / 255.,
-    do_augment: bool = True,
-    batch_size: int = 64,
-    target_size: typing.Tuple[int] = (160, 160),
-    n_channels: int = 3, gray: bool = False
-) -> typing.Iterator:
+class triplet_datagenerator:
+    def __init__(
+        self,
+        img_dir_path: str,
+        pairs_txt: str,
+        rescale: float = 1. / 255.,
+        do_augment: bool = True,
+        batch_size: int = 64,
+        target_size: typing.Tuple[int] = (160, 160),
+        n_channels: int = 3, 
+        gray: bool = False,
+    ):
+        
+        self.do_augment = do_augment
+        self.batch_size = batch_size
+        self.gray = gray
+        img_pairs, nb_classes, on_hot = create_pairs(
+            img_dir_path, func=facematch_image_pairs, pairs_txt=pairs_txt
+        )
 
-    img_pairs, nb_classes, on_hot = create_pairs(
-        img_dir_path, func=facematch_image_pairs, pairs_txt=pairs_txt
-    )
+        pairs = list(zip(img_pairs, nb_classes, on_hot))
+        random.shuffle(pairs)
+        self.zipped = itertools.cycle(pairs)
+        self.n_channels = n_channels
+        self.target_size = target_size
+        self.rescale = rescale
 
-    pairs = list(zip(img_pairs, nb_classes, on_hot))
-    random.shuffle(pairs)
-    zipped = itertools.cycle(pairs)
-
-    def _read_img(p: str):
-        img = img_read_n_resize(p, target_size, rescale=1 / 255.0)
-        if gray:
-            img = image_aug.rgb_to_grayscale(img, channels=n_channels)
+    def _read_img(self, p: str):
+        img = img_read_n_resize(p, self.target_size, rescale=1 / 255.0)
+        if self.gray:
+            img = image_aug.rgb_to_grayscale(img, channels=self.n_channels)
         return img
 
-    while True:
+    def __iter__(self) -> typing.Iterator:
+        return self
+
+    def __next__(self):
         X = []
         Y = []
-        for _ in range(batch_size):
-            img_pairs, nb_class, on_hot = next(zipped)
+        for _ in range(self.batch_size):
+            img_pairs, nb_class, on_hot = next(self.zipped)
 
             # For triplet extract 3 pairs
-            im1, im2, im3 = (np.array(_read_img(img), dtype=np.uint8) for img in img_pairs)
+            im1, im2, im3 = (np.array(self._read_img(img), dtype=np.uint8) for img in img_pairs)
 
-            if do_augment:
+            if self.do_augment:
                 im1, im2, im3 = [augment_img(im, augmentation_name='non_geometric') for im in [im1, im2, im3]]
 
             X.append(np.array([im1, im2, im3], dtype=np.uint8))
@@ -165,43 +177,54 @@ def triplet_datagenerator(
 
         X, Y = preprocess_input(np.array(X)), np.array(Y)
 
-        yield X, Y
+        return X, Y
 
 
-def facematch_datagenerator(
-    img_dir_path: str,
-    pairs_txt: str,
-    rescale: float = 1. / 255.,
-    do_augment: bool = True,
-    batch_size: int = 64,
-    target_size: typing.Tuple[int] = (160, 160),
-    n_channels: int = 3, gray: bool = False
-) -> typing.Iterator:
+class facematch_datagenerator:
+    def __init__(
+        self,
+        img_dir_path: str,
+        pairs_txt: str,
+        rescale: float = 1. / 255.,
+        do_augment: bool = True,
+        batch_size: int = 64,
+        target_size: typing.Tuple[int] = (160, 160),
+        n_channels: int = 3, gray: bool = False
+    ):
+        self.do_augment = do_augment
+        self.target_size = target_size
+        self.gray = gray
+        self.n_channels = n_channels
+        self.rescale = rescale
+        img_pairs, nb_classes, on_hot = create_pairs(
+            img_dir_path, func=facematch_image_pairs, pairs_txt=pairs_txt
+        )
 
-    img_pairs, nb_classes, on_hot = create_pairs(
-        img_dir_path, func=facematch_image_pairs, pairs_txt=pairs_txt
-    )
+        pairs = list(zip(img_pairs, nb_classes, on_hot))
+        random.shuffle(pairs)
+        self.zipped = itertools.cycle(pairs)
+        self.batch_size = batch_size
+        self.steps_per_epoch = np.floor(len(pairs) / batch_size)
 
-    pairs = list(zip(img_pairs, nb_classes, on_hot))
-    random.shuffle(pairs)
-    zipped = itertools.cycle(pairs)
+    def __iter__(self) -> typing.Iterator:
+        return self
 
-    def _read_img(p: str):
-        img = img_read_n_resize(p, target_size, rescale=1.0)
-        if gray:
-            img = image_aug.rgb_to_grayscale(img, channels=n_channels)
+    def _read_img(self, p: str):
+        img = img_read_n_resize(p, self.target_size, rescale=1.0)
+        if self.gray:
+            img = image_aug.rgb_to_grayscale(img, channels=self.n_channels)
         return img
 
-    while True:
+    def __next__(self):
         X = []
         Y = []
-        for _ in range(batch_size):
-            img_pairs, nb_class, on_hot = next(zipped)
+        for _ in range(self.batch_size):
+            img_pairs, nb_class, on_hot = next(self.zipped)
 
             # For facematch/siamese extract 2 pairs
-            im1, im2 = (np.array(_read_img(img), dtype=np.uint8) for img in img_pairs)
+            im1, im2 = (np.array(self._read_img(img), dtype=np.uint8) for img in img_pairs)
 
-            if do_augment:
+            if self.do_augment:
                 im1, im2 = [augment_img(im) for im in [im1, im2]]
 
             X.append(np.array([im1, im2], dtype=np.uint8))
@@ -209,7 +232,7 @@ def facematch_datagenerator(
 
         X, Y = preprocess_input(np.array(X)), np.array(Y)
 
-        yield X, Y
+        return X, Y
 
 
 def get_train_dataset(pairs_txt: str, img_dir_path: str, generator_fn: iter,
@@ -230,7 +253,9 @@ def get_train_dataset(pairs_txt: str, img_dir_path: str, generator_fn: iter,
     Returns:
         [type] -- [description]
     """
-    image_gen = generator_fn(
+    from functools import partial
+    image_gen = partial(
+        generator_fn,
         pairs_txt,
         img_dir_path,
         batch_size=batch_size,

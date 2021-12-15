@@ -72,7 +72,7 @@ class bottleneck_network:
 
     def __init__(self,
                  net: str = "resnet",
-                 emd_size: int = 128, 
+                 emd_size: int = 128,
                  input_shape: typing.Tuple = (96, 96, 3), **kwargs):
         assert net in ('mobilenet', 'resnet', 'vgg16'), "Invalid bottleneck network"
         self.net = net
@@ -92,10 +92,11 @@ class bottleneck_network:
         elif self.net == "vgg16":
             bottleneck = VGG16(include_top=False, weights='imagenet', input_shape=self.input_shape)
         elif self.net == "inception":
-            bottleneck = InceptionNetwork(input_shape=self.input_shape,
-                                          emd_size=self.emd_size,
-                                          weights=self.kwargs.get('weights', None)
-                                          )
+            bottleneck = InceptionNetwork(
+                input_shape=self.input_shape,
+                emd_size=self.emd_size,
+                weights=self.kwargs.get('weights', None)
+            )
         return bottleneck
 
     def build_models_v1(self, dropout=0.3):
@@ -159,7 +160,7 @@ def multi_headed_triplet_fn(input_shape=(96, 96, 3), emd_size=128, **kwargs):
     :type emd_size: [type], optional
     :return: [description]
     :rtype: [type]
-    """    
+    """
     assert len(input_shape) == 3, "Invalid input shape"
     base_model = bottleneck_network(
         input_shape=input_shape,

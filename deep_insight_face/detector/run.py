@@ -88,7 +88,7 @@ def filter_bounding_box(img: Image, bounding_boxes: typing.List[typing.List[int]
     return cropped_images, boxes
 
 
-def get_bounding_box(infer_model, image: np.ndarray, anchors: typing.List,
+def get_bounding_box(infer_model, image: Image, anchors: typing.List,
                      num_classes: int, target_size: typing.Tuple = (416, 416)):
     """
     Get the bounding box for the given image
